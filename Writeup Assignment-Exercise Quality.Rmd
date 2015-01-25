@@ -1,0 +1,167 @@
+---
+title: "Assessment of Exercise Quality"
+author: "Tim Reid"
+date: "Thursday, January 15, 2015"
+output: html_document
+---
+
+We are given a set of measurement data from accelerometers attached to 6 subjects during the performance of an exercise routine, and asked to assess the quality of the exercise routine. The pml-training data set includes 19,622 observations of 160 variables and includes a <classe> variable that summarizes the quality of the exercise performance.
+
+```{r, echo=FALSE}
+library(ggplot2)
+library(caret)
+
+pml.training <- read.csv("~/Spectrum-R/Coursera/MachineLearning/pml-training.csv", 
+              header = TRUE, stringsAsFactors = TRUE)
+
+pml.testing  <- read.csv("~/Spectrum-R/Coursera/MachineLearning/pml-testing.csv", 
+                     header = TRUE, stringsAsFactors = TRUE)
+```
+
+We first get a "big picture" view of the data and see that there is a lot of missing data.
+```{r, echo=FALSE}
+image(is.na(pml.training), main = "Missing Values", xlab = "Observation", 
+      ylab = "Variable", xaxt = "n", yaxt = "n", bty = "n")
+axis(1, seq(0, 1, length.out = nrow(pml.training)), 1:nrow(pml.training), col = "white")
+axis(2, seq(0, 1, length.out = ncol(pml.training)), 1:ncol(pml.training), tick = FALSE)
+```
+The data set is sparse as seen in the above view where the white space reflects missing values. Many predictors are nearly devoid of data. Examining the data set in detail shows that these are measurements taken rapidly over a short time interval. The measurements are frequently summarized. Some predictors are only populated during the summaries. 
+
+One solution is to select a subset of predictors for which we are provided complete data. With only a little knowledge of the data set we can select a subset containing those predictors and eliminating others (user_name, timestamps, etc.) that may confound the results.
+
+```{r, echo=FALSE}
+pml.training <- pml.training[ , c(8:11, 37:49, 60:68, 84:86, 102, 113:124, 140, 151:160)]
+```
+This leaves 19,622 observations of 53 variables, including the <classe> response variable.
+
+Next we divide the pml-training seet into a training and a testing set:
+```{r, echo=FALSE}
+tr.index <- createDataPartition(y = pml.training$classe, p = 0.75, list = FALSE)
+training <- pml.training[ tr.index, ]
+testing  <- pml.training[ -tr.index, ]
+```
+Then take a look at correlations among the predictors. First we will scale the training data set.
+```{r, echo=FALSE}
+library(corrplot)
+training.s <- scale(training[1:52],center=TRUE,scale=TRUE)
+M <- cor(training.s)
+corrplot(M, order = "original", tl.pos = "n")
+```
+We see that there are some correlated predictors which we should remove.
+We will remove those predictors that have a correlation with the response variable greater than 0.7.
+
+```{r, echo=FALSE}
+hCor <- findCorrelation(M, 0.70)
+training.f <- training.s[,-hCor]
+M <- cor(training.f)
+corrplot(M, order = "hclust")
+```
+This leaves 32 predictors
+We begin with a recursive partitioning model using the rpart package.
+
+```{r, echo=FALSE}
+set.seed(8181)
+library(rpart)
+rp1    <- train(training$classe ~ ., data = training.f, method="rpart")
+```
+But this only has an accuracy of 0.51.
+```{r, echo=FALSE}
+library(rattle)
+fancyRpartPlot(rp1$finalModel)
+```
+M <- confusionMatrix(testing$classe, predict(rp1, testing))
+
+Next we try linear discriminant analysis.
+```{r, echo=FALSE}
+set.seed(8181)
+library(rpart)
+rp2    <- train(training$classe ~ ., data=training.f, method="lda")
+```
+This model has an accuracy of 0.71 which is better but still not as good as we'd like.
+So we next try using a tree model.
+```{r, echo=FALSE}
+set.seed(8181)
+library(rpart)
+rp3    <- train(classe ~ ., data=training, method="ctree")
+```
+This has an accuracy of 0.87. Let's see how well it performs using our testing data.
+
+```{r, echo=FALSE}
+M <- confusionMatrix(testing$classe, predict(rp3, testing))
+```
+
+rp4    <- train(classe ~ ., data=training, method="rf")
+
+# rp3    <-   randomForest(classe ~ ., data=training, keep.forest=FALSE, importance=TRUE)
+```
+Next we will use the plotcp() function to examine how large a tree we need to use
+plotcp(rp1)
+printcp(rp1)
+rp2 <- prune(rp1, cp = 0.02)
+
+plot(rp2, uniform = TRUE)
+text(rp2, use.n=TRUE, cex = 0.75)
+```
+Now we need to evaluate the fit
+
+```{r, echo=FALSE}
+fit.preds = predict(rp2,newdata=training[, -53],type="class")
+fit.table = table(training$classe,fit.preds)
+fit.table
+```
+
+library(ROCR)
+fit.pr = predict(prunedtree,newdata=data$val,type="prob")[,2]
+fit.pred = prediction(fit.pr,data$val$income)
+fit.perf = performance(fit.pred,"tpr","fpr")
+plot(fit.perf,lwd=2,col="blue",
+     main="ROC:  Classification Trees on Adult Dataset")
+abline(a=0,b=1)
+
+
+
+
+
+
+
+
+
+A next step is to examine how the 52 predictors are correlated.
+```{r, echo=FALSE}
+M <- abs(cor(training[, c(1:52)]))
+diag(M) <- 0
+which(M > 0.8, arr.ind = TRUE)
+```
+An examination of the correlations shows many variables whose absolute value of the correlation is above 0.8, even above 0.9.
+
+So, I next tried a principal components analysis to identify a subset of the predictors that could explain more of the variance.
+```{r, echo=FALSE}
+pca <- princomp(training[,c(1:52)], scores = TRUE, cor = TRUE)
+prComp <- prcomp(training[, c(1:52)])
+head(pca$rotation)
+plot(prComp$x[,1], prComp$x[,2])
+scores = as.data.frame(prComp$x)
+ggplot(data = scores, aes(x = PC1, y = PC2, label = rownames(scores))) +
+  geom_hline(yintercept = 0, colour = "gray65") +
+  geom_vline(xintercept = 0, colour = "gray65") +
+  geom_text(colour = "tomato", alpha = 0.8, size = 4) +
+  ggtitle("PCA plot of ??????????")
+
+```
+
+
+
+
+
+
+```{r, echo=FALSE}
+library(ROCR)
+fit.pr = predict(prunedtree,newdata=data$val,type="prob")[,2]
+fit.pred = prediction(fit.pr,data$val$income)
+fit.perf = performance(fit.pred,"tpr","fpr")
+plot(fit.perf,lwd=2,col="blue",
+     main="ROC:  Classification Trees on Adult Dataset")
+abline(a=0,b=1)
+```
+
+

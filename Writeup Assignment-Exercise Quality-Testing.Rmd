@@ -1,0 +1,161 @@
+---
+title: "Assessment of Exercise Quality"
+author: "Tim Reid"
+date: "Sunday, January 25, 2015"
+output: html_document
+---
+We are given a set of measurement data from accelerometers attached to 6 subjects during the performance of an exercise routine, and asked to create a model to assess the quality of their performance of that exercise. The measurement data is captured in a set of 19,622 observations of 160 variables, and includes a <classe> variable that characterizes the quality of the exercise performance.
+
+An additional testing data set is provided to test the model.
+
+Preliminary Data Exploration
+----------------------------
+
+First, access needed libraries and load the training data set.
+
+```{r, echo=TRUE}
+library(lattice)
+library(ggplot2)
+library(caret)
+library(rpart)
+library(MASS)
+library(corrplot)
+
+pml.training <- read.csv("~/Spectrum-R/Coursera/MachineLearning/pml-training.csv", 
+              header = TRUE, stringsAsFactors = TRUE)
+```
+
+From a "big picture" view of the data we see that there are many missing values. Many of the predictors are nearly devoid of values. In the chart below the light colored areas reflect missing values.
+
+```{r, echo=FALSE}
+image(is.na(pml.training), main = "Missing Values", xlab = "Observation", 
+      ylab = "Predictor", xaxt = "n", yaxt = "n", bty = "n")
+axis(1, seq(0, 1, length.out = nrow(pml.training)), 1:nrow(pml.training), col = "white")
+axis(2, seq(0, 1, length.out = ncol(pml.training)), 1:ncol(pml.training), tick = FALSE)
+```
+
+Examining the data set in detail, it appears that this is a set of measurements taken rapidly over a short time interval. The measurements are frequently summarized. Some predictors are only populated during the summaries. 
+
+One solution is to select a subset of predictors for which we are provided complete data. With only a little knowledge of the data set we can select a subset containing those predictors and eliminate others (user_name, timestamps, etc.) that may confound the results.
+
+```{r, echo=TRUE}
+pml.training <- pml.training[ , c(8:11, 37:49, 60:68, 84:86, 102, 113:124, 140, 151:160)]
+dim(pml.training)
+```
+
+This leaves 19,622 observations of 53 variables, including the CLASSE response variable.
+
+Preprocessing
+-------------
+
+Next we divide the pml-training set into a training and a testing set that we can later use to cross validate the models.
+
+```{r, echo=TRUE}
+tr.index <- createDataPartition(y = pml.training$classe, p = 0.80, list = FALSE)
+training <- pml.training[ tr.index, ]
+testing  <- pml.training[ -tr.index, ]
+```
+
+Using the tools in the caret package we next look for near zero-variance predictors which we might wish to eliminate as they may create problems for some model types.
+
+```{r, echo=TRUE}
+nearZeroVar(training, saveMetrics= FALSE)
+```
+
+The nearZeroVar function returns a null result indicating that there are no near zero-variance variables among the remaining predictors.
+
+We next examine correlations among the predictors, and remove predictors that have a pairwise correlation greater than 0.80.
+
+```{r, echo=TRUE}
+set.seed(1)
+M <- cor(training[ , -length(training)])
+corrplot(M, order = "original", tl.pos = "n")
+hCor <- findCorrelation(M, 0.80)
+training <- training[, -hCor]
+testing  <- testing[, -hCor]
+```
+
+This leaves 
+
+```{r, echo=TRUE}
+dim(training)[2]
+```
+
+predictors.
+
+Running the Models
+------------------
+
+We'll first pre-process using principal components analysis.
+
+```{r, echo=TRUE}
+set.seed(8181)
+preProc <- preProcess(training[, -length(training)], method = "pca")
+trainPC <- predict(preProc, training[, -length(training)])
+```
+
+This leaves 
+
+```{r, echo=TRUE}
+dim(trainPC)[2]
+```
+
+predictors.
+
+So, we begin with a recursive partitioning model from the rpart package.
+
+```{r, echo=TRUE}
+set.seed(8181)
+rp1 <- train(training$classe ~ ., data = trainPC, method="rpart")
+```
+
+The accuracy is disappointing.
+
+```{r, echo = TRUE}
+rp1$results[1,2]
+```
+
+Next we try a k-nearest neighbor model.
+
+```{r, echo=TRUE}
+set.seed(8181)
+rp2 <- train(training$classe ~ ., data=trainPC, method="knn")
+```
+
+The accuracy here is promising. The model accuracy is
+
+```{r, echo = TRUE}
+rp2$results[1,2]
+```
+
+Now we evaluate the fit of the knn model using the cross-validation set. An examination of the confusion matrix shows 
+
+```{r, echo = TRUE}
+testPC <- predict(preProc, testing[, -length(testing)])
+cf <- confusionMatrix(testing$classe,predict(rp2, newdata = testPC))
+cf
+```
+
+An examination of the confusion matrix shows that the out-of-sample accuracy is 
+
+```{r, echo = FALSE}
+cf$overall[1]
+```
+
+which is very good.
+
+Summary
+-------
+
+Finally, we turn to the pml-testing data provided to "grade" the 20 test samples using our model.
+
+```{r, echo = TRUE}
+pml.testing  <- read.csv("~/Spectrum-R/Coursera/MachineLearning/pml-testing.csv", 
+                     header = TRUE, stringsAsFactors = TRUE)
+pml.testing  <- pml.testing[ ,  c(8:11, 37:49, 60:68, 84:86, 102, 113:124, 140, 151:160)]
+pml.testing  <- pml.testing[, -hCor]
+
+tPC <- predict(preProc, pml.testing[, -length(pml.testing)])
+result.set <- predict(rp2$finalModel, tPC, type = "class")
+result.set
+```
